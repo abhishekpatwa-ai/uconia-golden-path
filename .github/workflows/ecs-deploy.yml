@@ -1,0 +1,143 @@
+# ================= GOLDEN PIPELINE: build → scan → push → deploy (reusable) =================
+#
+# Har service ki repo ise 5 lines se call karti hai:
+#
+#   jobs:
+#     deploy:
+#       uses: abhishekpatwa-ai/uconia-golden-path/.github/workflows/ecs-deploy.yml@main
+#       with:
+#         service: uconia-api
+#         aws-account-id: "448270596538"
+#
+# Convention: service ka naam hi ECR repo, ECS service, task definition family hai,
+# aur deploy role "<service>-github-deploy" hai (sab modules/ecs-service banata hai).
+
+name: ecs-deploy (golden path)
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: "Service name (ECR repo / ECS service / task family)"
+        required: true
+        type: string
+      aws-account-id:
+        required: true
+        type: string
+      aws-region:
+        required: false
+        type: string
+        default: eu-west-1
+      cluster:
+        required: false
+        type: string
+        default: learning-cluster
+      container-name:
+        required: false
+        type: string
+        default: app
+
+permissions:
+  id-token: write # GitHub ka OIDC token lene ke liye
+  contents: read
+
+jobs:
+  build-scan-deploy:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-${{ inputs.service }} # ek service ke do deploy ek saath nahi
+      cancel-in-progress: false
+    env:
+      SERVICE: ${{ inputs.service }}
+      IMAGE_TAG: ${{ github.sha }} # immutable tag = commit SHA
+
+    steps:
+      # 1. Service repo ka code (jis repo ne call kiya)
+      - name: Checkout service code
+        uses: actions/checkout@v4
+
+      # 2. AWS login bina access key: OIDC token → STS → temporary credentials (~1 ghanta)
+      - name: Login to AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ inputs.aws-account-id }}:role/${{ inputs.service }}-github-deploy
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 3. Is commit ki image pehle se hai? (re-run par IMMUTABLE tag dobara push nahi ho sakta)
+      - name: Check if image already exists
+        id: exists
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          echo "IMAGE=$REGISTRY/$SERVICE:$IMAGE_TAG" >> $GITHUB_ENV
+          if aws ecr describe-images --repository-name $SERVICE --image-ids imageTag=$IMAGE_TAG >/dev/null 2>&1; then
+            echo "found=true" >> $GITHUB_OUTPUT
+            echo "Image $IMAGE_TAG already in ECR, skipping build and push"
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
+
+      # 4. Build: ek hi image, tag = commit SHA, version app ke andar bhi
+      - name: Build image
+        if: steps.exists.outputs.found == 'false'
+        run: docker build --build-arg APP_VERSION=$IMAGE_TAG -t $IMAGE .
+
+      - name: Push image to ECR
+        if: steps.exists.outputs.found == 'false'
+        run: docker push $IMAGE
+
+      # 5. Security gate: ECR scan ka result. CRITICAL mila to deploy NAHI hoga
+      - name: Security gate (ECR scan, block CRITICAL)
+        run: |
+          STATUS=$(aws ecr describe-images --repository-name $SERVICE --image-ids imageTag=$IMAGE_TAG \
+            --query 'imageDetails[0].imageScanStatus.status' --output text)
+          echo "Scan status: $STATUS"
+          if [ "$STATUS" = "None" ]; then
+            echo "No scan yet, starting one"
+            aws ecr start-image-scan --repository-name $SERVICE --image-id imageTag=$IMAGE_TAG >/dev/null
+          fi
+          aws ecr wait image-scan-complete --repository-name $SERVICE --image-id imageTag=$IMAGE_TAG
+          CRITICAL=$(aws ecr describe-image-scan-findings --repository-name $SERVICE --image-id imageTag=$IMAGE_TAG \
+            --query 'imageScanFindings.findingSeverityCounts.CRITICAL' --output text)
+          echo "CRITICAL findings: $CRITICAL"
+          if [ "$CRITICAL" != "None" ] && [ "$CRITICAL" -gt 0 ]; then
+            echo "::error::$CRITICAL CRITICAL vulnerabilities found. Deployment blocked."
+            exit 1
+          fi
+
+      # 6. Abhi wali task definition lo, placeholder "command" hatao (asli image ka apna ENTRYPOINT hai)
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition --task-definition $SERVICE --query taskDefinition \
+            | jq 'del(.containerDefinitions[].command)' > task-def.json
+
+      # 7. Usi ki copy mein sirf image + APP_VERSION badlo → naya revision
+      - name: Render new task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-def.json
+          container-name: ${{ inputs.container-name }}
+          image: ${{ env.IMAGE }}
+          environment-variables: |
+            APP_VERSION=${{ github.sha }}
+
+      # 8. Deploy: naya revision register → service update → rolling deploy → healthy hone tak wait
+      #    Fail hua to ECS ka circuit breaker purane revision par rollback karta hai
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ inputs.service }}
+          cluster: ${{ inputs.cluster }}
+          wait-for-service-stability: true
+
+      - name: Summary
+        run: |
+          echo "### Deployed $SERVICE" >> $GITHUB_STEP_SUMMARY
+          echo "- Image: \`$IMAGE\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Cluster: ${{ inputs.cluster }}" >> $GITHUB_STEP_SUMMARY

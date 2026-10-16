@@ -1,0 +1,19 @@
+# Terraform plugins and local files
+.terraform/
+.terraform.tfstate.lock.info
+
+# State files: NEVER commit (they can contain secrets)
+*.tfstate
+*.tfstate.*
+
+# Saved plans: can contain secret values
+tfplan
+*.tfplan
+
+# Crash logs and local overrides
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
