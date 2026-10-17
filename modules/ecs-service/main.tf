@@ -121,7 +121,7 @@ resource "aws_ecs_service" "this" {
   }
 
   # Target group pehle ALB rule se juda ho, tabhi ECS use use kar sakta hai
-  depends_on = [aws_lb_listener_rule.this]
+  depends_on = [aws_lb_listener_rule.this, aws_vpc_security_group_egress_rule.alb_to_task]
 }
 
 # ---------- 5. Autoscaling (CPU 60% target) ----------
