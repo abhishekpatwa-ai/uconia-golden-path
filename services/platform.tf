@@ -31,7 +31,7 @@ locals {
     cluster_name       = data.terraform_remote_state.ecs.outputs.cluster_name
     vpc_id             = data.terraform_remote_state.network.outputs.vpc_id
     private_subnet_ids = data.terraform_remote_state.network.outputs.private_subnet_ids
-    app_sg_id          = data.terraform_remote_state.network.outputs.app_sg_id
+    alb_sg_id          = data.terraform_remote_state.network.outputs.alb_sg_id
     listener_arn       = data.terraform_remote_state.alb.outputs.listener_arn
     oidc_provider_arn  = data.terraform_remote_state.cicd.outputs.oidc_provider_arn
   }

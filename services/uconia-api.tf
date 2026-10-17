@@ -11,12 +11,13 @@ module "uconia_api" {
   github_repo_id    = 1422089262                    # api.github.com/repos/abhishekpatwa-ai/uconia-api → "id"
   path_pattern      = "/api/*"
   listener_priority = 100
+  create_database   = true # apna RDS PostgreSQL + Secrets Manager password
 
   # --- Platform values (sab services ke liye same) ---
   cluster_name       = local.platform.cluster_name
   vpc_id             = local.platform.vpc_id
   private_subnet_ids = local.platform.private_subnet_ids
-  app_sg_id          = local.platform.app_sg_id
+  alb_sg_id          = local.platform.alb_sg_id
   listener_arn       = local.platform.listener_arn
   oidc_provider_arn  = local.platform.oidc_provider_arn
 }

@@ -57,6 +57,21 @@ resource "aws_ecs_task_definition" "this" {
       "mkdir -p /srv/api/info && echo ok > /srv/health && echo '${var.name}: placeholder, waiting for first pipeline deploy' > /srv/api/info/index.html && python -m http.server ${var.container_port} --directory /srv"
     ]
     portMappings = [{ containerPort = var.container_port, protocol = "tcp" }]
+
+    # DB ki details: secret NAHI hain, isliye plain environment variables
+    environment = var.create_database ? [
+      { name = "DB_HOST", value = aws_db_instance.this[0].address },
+      { name = "DB_PORT", value = "5432" },
+      { name = "DB_NAME", value = local.db_name },
+    ] : []
+
+    # ⭐ Secret: value task definition mein kabhi nahi likhi jaati, sirf secret ka ARN.
+    # Task start par EXECUTION ROLE Secrets Manager se padhkar env variable bana deta hai.
+    secrets = var.create_database ? [
+      { name = "DB_USER", valueFrom = "${aws_db_instance.this[0].master_user_secret[0].secret_arn}:username::" },
+      { name = "DB_PASSWORD", valueFrom = "${aws_db_instance.this[0].master_user_secret[0].secret_arn}:password::" },
+    ] : []
+
     logConfiguration = {
       logDriver = "awslogs"
       options = {
@@ -77,8 +92,8 @@ resource "aws_ecs_service" "this" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = var.private_subnet_ids # 2 AZ
-    security_groups  = [var.app_sg_id]        # 8080 sirf ALB se
+    subnets          = var.private_subnet_ids       # 2 AZ
+    security_groups  = [aws_security_group.task.id] # is service ka apna SG: 8080 sirf ALB se (security.tf)
     assign_public_ip = false
   }
 

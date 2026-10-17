@@ -67,10 +67,28 @@ variable "listener_priority" {
   type        = number
 }
 
+# ---------- Database (optional) ----------
+variable "create_database" {
+  description = "true = is service ka apna RDS PostgreSQL + Secrets Manager password"
+  type        = bool
+  default     = false
+}
+
+variable "db_instance_class" {
+  type    = string
+  default = "db.t4g.micro" # lab ke liye sabse chhota
+}
+
+variable "db_multi_az" {
+  description = "Prod mein true (standby doosre AZ mein). Lab mein false, cost bachane ke liye"
+  type        = bool
+  default     = false
+}
+
 # ---------- Platform se aane wali values (har service ke liye same) ----------
 variable "cluster_name" { type = string }
 variable "vpc_id" { type = string }
 variable "private_subnet_ids" { type = list(string) }
-variable "app_sg_id" { type = string }
+variable "alb_sg_id" { type = string } # task SG mein port sirf isi ALB SG se khulta hai
 variable "listener_arn" { type = string }
 variable "oidc_provider_arn" { type = string }
